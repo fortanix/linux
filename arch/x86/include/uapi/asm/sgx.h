@@ -27,6 +27,8 @@ enum sgx_page_flags {
 	_IOW(SGX_MAGIC, 0x02, struct sgx_enclave_init)
 #define SGX_IOC_ENCLAVE_PROVISION \
 	_IOW(SGX_MAGIC, 0x03, struct sgx_enclave_provision)
+#define SGX_IOC_ENCLAVE_EXTEND \
+	_IOW(SGX_MAGIC, 0x04, struct sgx_enclave_extend)
 
 /**
  * struct sgx_enclave_create - parameter structure for the
@@ -54,6 +56,15 @@ struct sgx_enclave_add_pages {
 	__u64 secinfo;
 	__u64 flags;
 	__u64 count;
+};
+
+/**
+ * struct sgx_enclave_extend - parameter structure for the
+ *                             %SGX_IOC_ENCLAVE_MEASURE ioctl
+ * @offset:	offset of the data from the start address for the data
+ */
+struct sgx_enclave_extend {
+	__u64 offset;
 };
 
 /**

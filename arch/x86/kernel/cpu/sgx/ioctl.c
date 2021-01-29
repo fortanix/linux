@@ -261,20 +261,20 @@ static int __sgx_encl_add_page(struct sgx_encl *encl,
 	return ret ? -EIO : 0;
 }
 
-/*
- * If the caller requires measurement of the page as a proof for the content,
- * use EEXTEND to add a measurement for 256 bytes of the page. Repeat this
- * operation until the entire page is measured."
- */
-static int __sgx_encl_extend(struct sgx_encl *encl,
-			     struct sgx_epc_page *epc_page)
+static int __sgx_encl_extend_chunk(struct sgx_encl *encl,
+				   void *chunk, unsigned long size)
 {
 	unsigned long offset;
 	int ret;
+	void *secs_addr;
 
-	for (offset = 0; offset < PAGE_SIZE; offset += SGX_EEXTEND_BLOCK_SIZE) {
-		ret = __eextend(sgx_get_epc_virt_addr(encl->secs.epc_page),
-				sgx_get_epc_virt_addr(epc_page) + offset);
+	if (!size || !IS_ALIGNED(size, SGX_EEXTEND_BLOCK_SIZE))
+		return -EINVAL;
+
+	secs_addr = sgx_get_epc_virt_addr(encl->secs.epc_page);
+	for (offset = 0; offset < size; offset += SGX_EEXTEND_BLOCK_SIZE) {
+		ret = __eextend(secs_addr,
+				chunk + offset);
 		if (ret) {
 			if (encls_failed(ret))
 				ENCLS_WARN(ret, "EEXTEND");
@@ -284,6 +284,19 @@ static int __sgx_encl_extend(struct sgx_encl *encl,
 	}
 
 	return 0;
+}
+
+/*
+ * If the caller requires measurement of the page as a proof for the content,
+ * use EEXTEND to add a measurement for 256 bytes of the page. Repeat this
+ * operation until the entire page is measured."
+ */
+static int __sgx_encl_extend_page(struct sgx_encl *encl,
+			     struct sgx_epc_page *epc_page)
+{
+	void *chunk = sgx_get_epc_virt_addr(epc_page);
+
+	return __sgx_encl_extend_chunk(encl, chunk, PAGE_SIZE);
 }
 
 static int sgx_encl_add_page(struct sgx_encl *encl, unsigned long src,
@@ -346,7 +359,7 @@ static int sgx_encl_add_page(struct sgx_encl *encl, unsigned long src,
 	encl->secs_child_cnt++;
 
 	if (flags & SGX_PAGE_MEASURE) {
-		ret = __sgx_encl_extend(encl, epc_page);
+		ret = __sgx_encl_extend_page(encl, epc_page);
 		if (ret)
 			goto err_out;
 	}
@@ -463,6 +476,49 @@ static long sgx_ioc_enclave_add_pages(struct sgx_encl *encl, void __user *arg)
 	if (copy_to_user(arg, &add_arg, sizeof(add_arg)))
 		return -EFAULT;
 
+	return ret;
+}
+
+static long sgx_ioc_enclave_extend(struct sgx_encl *encl, void __user *user_arg)
+{
+	struct sgx_enclave_extend arg;
+	struct sgx_encl_page *encl_page;
+	void *chunk;
+	long ret = 0;
+
+	if (!test_bit(SGX_ENCL_CREATED, &encl->flags) ||
+	    test_bit(SGX_ENCL_INITIALIZED, &encl->flags))
+		return -EINVAL;
+
+	if (copy_from_user(&arg, user_arg, sizeof(arg)))
+		return -EFAULT;
+
+	if (!arg.offset || !IS_ALIGNED(arg.offset, SGX_EEXTEND_BLOCK_SIZE)) {
+		pr_info("offset not a multiple of 256: %llu\n", arg.offset);
+		return -EINVAL;
+	}
+
+	encl_page = xa_load(&encl->page_array, PFN_DOWN(encl->base + arg.offset));
+
+	if (!encl_page) {
+		pr_info("enc page not found\n");
+		return -EFAULT;
+	}
+
+	mmap_read_lock(current->mm);
+	mutex_lock(&encl->lock);
+	sgx_unmark_page_reclaimable(encl_page->epc_page);
+
+	chunk = sgx_get_epc_virt_addr(encl_page->epc_page) + (arg.offset & (PAGE_SIZE - 1));
+
+	if (__sgx_encl_extend_chunk(encl, chunk, SGX_EEXTEND_BLOCK_SIZE)) {
+		pr_info("extend returned an error\n");
+		ret = -EFAULT;
+	}
+
+	sgx_mark_page_reclaimable(encl_page->epc_page);
+	mutex_unlock(&encl->lock);
+	mmap_read_unlock(current->mm);
 	return ret;
 }
 
@@ -705,6 +761,9 @@ long sgx_ioctl(struct file *filep, unsigned int cmd, unsigned long arg)
 		break;
 	case SGX_IOC_ENCLAVE_PROVISION:
 		ret = sgx_ioc_enclave_provision(encl, (void __user *)arg);
+		break;
+	case SGX_IOC_ENCLAVE_EXTEND:
+		ret = sgx_ioc_enclave_extend(encl, (void __user *)arg);
 		break;
 	default:
 		ret = -ENOIOCTLCMD;
