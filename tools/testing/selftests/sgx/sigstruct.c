@@ -260,28 +260,25 @@ static bool mrenclave_eextend(EVP_MD_CTX *ctx, uint64_t offset,
 			      const uint8_t *data)
 {
 	struct mreextend mreextend;
-	int i;
 
-	for (i = 0; i < 0x1000; i += 0x100) {
-		memset(&mreextend, 0, sizeof(mreextend));
-		mreextend.tag = MREEXTEND;
-		mreextend.offset = offset + i;
+	memset(&mreextend, 0, sizeof(mreextend));
+	mreextend.tag = MREEXTEND;
+	mreextend.offset = offset;
 
-		if (!mrenclave_update(ctx, &mreextend))
-			return false;
+	if (!mrenclave_update(ctx, &mreextend))
+		return false;
 
-		if (!mrenclave_update(ctx, &data[i + 0x00]))
-			return false;
+	if (!mrenclave_update(ctx, &data[0x00]))
+		return false;
 
-		if (!mrenclave_update(ctx, &data[i + 0x40]))
-			return false;
+	if (!mrenclave_update(ctx, &data[0x40]))
+		return false;
 
-		if (!mrenclave_update(ctx, &data[i + 0x80]))
-			return false;
+	if (!mrenclave_update(ctx, &data[0x80]))
+		return false;
 
-		if (!mrenclave_update(ctx, &data[i + 0xC0]))
-			return false;
-	}
+	if (!mrenclave_update(ctx, &data[0xC0]))
+		return false;
 
 	return true;
 }
@@ -289,12 +286,13 @@ static bool mrenclave_eextend(EVP_MD_CTX *ctx, uint64_t offset,
 static bool mrenclave_segment(EVP_MD_CTX *ctx, struct encl *encl,
 			      struct encl_segment *seg)
 {
-	uint64_t end = seg->offset + seg->size;
+	uint64_t end = seg->offset + size_fit(seg->size, SGX_EEXTEND_BLOCK_SIZE);
 	uint64_t offset;
 
-	for (offset = seg->offset; offset < end; offset += PAGE_SIZE) {
-		if (!mrenclave_eadd(ctx, offset, seg->flags))
-			return false;
+	for (offset = seg->offset; offset < end; offset += SGX_EEXTEND_BLOCK_SIZE) {
+		if (offset % PAGE_SIZE == 0)
+			if (!mrenclave_eadd(ctx, offset, seg->flags))
+				return false;
 
 		if (!mrenclave_eextend(ctx, offset, encl->src + offset))
 			return false;

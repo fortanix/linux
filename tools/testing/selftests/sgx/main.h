@@ -34,6 +34,7 @@ void encl_delete(struct encl *ctx);
 bool encl_load(const char *path, struct encl *encl);
 bool encl_measure(struct encl *encl);
 bool encl_build(struct encl *encl);
+uint64_t size_fit(uint64_t size_in_bytes, uint64_t block_size);
 
 int sgx_call_vdso(void *rdi, void *rsi, long rdx, u32 function, void *r8, void *r9,
 		  struct sgx_enclave_run *run);

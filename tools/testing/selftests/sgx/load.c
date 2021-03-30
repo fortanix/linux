@@ -102,26 +102,67 @@ static bool encl_ioc_create(struct encl *encl)
 static bool encl_ioc_add_pages(struct encl *encl, struct encl_segment *seg)
 {
 	struct sgx_enclave_add_pages ioc;
+	struct sgx_enclave_extend ioc_extend;
 	struct sgx_secinfo secinfo;
+	uint64_t size_full_pages;
+	uint64_t size;
+	uint64_t chunk_offset;
 	int rc;
+
+	size_full_pages = size_fit(seg->size, SGX_EEXTEND_BLOCK_SIZE) & PAGE_MASK;
+	size = size_fit(seg->size, SGX_EEXTEND_BLOCK_SIZE);
 
 	memset(&secinfo, 0, sizeof(secinfo));
 	secinfo.flags = seg->flags;
 
+	// Add and extend full pages
 	ioc.src = (uint64_t)encl->src + seg->offset;
 	ioc.offset = seg->offset;
-	ioc.length = seg->size;
 	ioc.secinfo = (unsigned long)&secinfo;
+	ioc.length = size_full_pages;
 	ioc.flags = SGX_PAGE_MEASURE;
 
-	rc = ioctl(encl->fd, SGX_IOC_ENCLAVE_ADD_PAGES, &ioc);
-	if (rc < 0) {
-		fprintf(stderr, "SGX_IOC_ENCLAVE_ADD_PAGES failed: errno=%d.\n",
-			errno);
-		return false;
+	if (ioc.length > 0) {
+		rc = ioctl(encl->fd, SGX_IOC_ENCLAVE_ADD_PAGES, &ioc);
+		if (rc < 0) {
+			fprintf(stderr, "SGX_IOC_ENCLAVE_ADD_PAGES failed: errno=%d.\n",
+				errno);
+			return false;
+		}
+	}
+
+	if (size_full_pages < size) {
+		// Add last, partly measured page
+		ioc.offset = seg->offset + size_full_pages;
+		ioc.length = 0x1000;
+		ioc.flags = 0;
+
+		rc = ioctl(encl->fd, SGX_IOC_ENCLAVE_ADD_PAGES, &ioc);
+		if (rc < 0) {
+			fprintf(stderr, "SGX_IOC_ENCLAVE_ADD_PAGES failed: errno=%d.\n",
+				errno);
+			return false;
+		}
+
+		// extend chunks
+		for (chunk_offset = 0; chunk_offset < size - size_full_pages;
+				chunk_offset += SGX_EEXTEND_BLOCK_SIZE) {
+			ioc_extend.offset = seg->offset + size_full_pages + chunk_offset;
+			rc = ioctl(encl->fd, SGX_IOC_ENCLAVE_EXTEND, &ioc_extend);
+			if (rc < 0) {
+				fprintf(stderr, "SGX_IOC_ENCLAVE_EXTEND failed: errno=%d.\n",
+					errno);
+				return false;
+			}
+		}
 	}
 
 	return true;
+}
+
+uint64_t size_fit(uint64_t size_in_bytes, uint64_t block_size)
+{
+	return (size_in_bytes + block_size - 1) & (~(block_size - 1));
 }
 
 bool encl_load(const char *path, struct encl *encl)
@@ -197,7 +238,7 @@ bool encl_load(const char *path, struct encl *encl)
 		}
 
 		seg->offset = (phdr->p_offset & PAGE_MASK) - src_offset;
-		seg->size = (phdr->p_filesz + PAGE_SIZE - 1) & PAGE_MASK;
+		seg->size = phdr->p_filesz;
 
 		printf("0x%016lx 0x%016lx 0x%02x\n", seg->offset, seg->size,
 		       seg->prot);
@@ -209,7 +250,7 @@ bool encl_load(const char *path, struct encl *encl)
 
 	encl->src = encl->bin + src_offset;
 	encl->src_size = encl->segment_tbl[j - 1].offset +
-			 encl->segment_tbl[j - 1].size;
+			 size_fit(encl->segment_tbl[j - 1].size, PAGE_SIZE);
 
 	for (encl->encl_size = 4096; encl->encl_size < encl->src_size; )
 		encl->encl_size <<= 1;
