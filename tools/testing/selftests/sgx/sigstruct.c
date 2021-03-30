@@ -128,8 +128,11 @@ static bool check_crypto_errors(void)
 static inline const BIGNUM *get_modulus(RSA *key)
 {
 	const BIGNUM *n;
-
+#if OPENSSL_VERSION_NUMBER >= 0x10100000L
 	RSA_get0_key(key, &n, NULL, NULL);
+#else
+	n = key->n;
+#endif
 	return n;
 }
 
