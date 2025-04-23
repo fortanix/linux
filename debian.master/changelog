@@ -1,3 +1,10 @@
+linux (6.8.0-57.59) UNRELEASED; urgency=medium
+
+  * Fortanix patch
+    - x86/sgx: Adding eextend ioctl
+
+ -- Yuxiang Cao <info@fortanix.com>  Wed, 23 Apr 2025 14:22:15 -0700
+
 linux (6.8.0-57.59) noble; urgency=medium
 
   * noble/linux: 6.8.0-57.59 -proposed tracker (LP: #2102490)
